@@ -47,6 +47,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
             - compaction_notice_token_reserve: Tokens to reserve for notice (default: 800)
             - compaction_notice_verbosity: Notice detail level - "minimal", "normal", "verbose" (default: "normal")
             - compaction_notice_min_level: Only show notice if compaction level >= this (default: 1)
+            - output_reserve_fraction: Fraction of max_output_tokens to reserve for responses (default: 0.5)
 
     Returns:
         Optional cleanup function
@@ -65,6 +66,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
         ),
         compaction_notice_verbosity=config.get("compaction_notice_verbosity", "normal"),
         compaction_notice_min_level=config.get("compaction_notice_min_level", 1),
+        output_reserve_fraction=config.get("output_reserve_fraction", 0.5),
         hooks=getattr(coordinator, "hooks", None),
     )
     await coordinator.mount("context", context)
@@ -118,6 +120,7 @@ class SimpleContextManager:
         compaction_notice_token_reserve: int = 800,
         compaction_notice_verbosity: str = "normal",
         compaction_notice_min_level: int = 1,
+        output_reserve_fraction: float = 0.5,
         hooks: Any = None,
     ):
         """
@@ -134,6 +137,9 @@ class SimpleContextManager:
             compaction_notice_token_reserve: Tokens to reserve for notice
             compaction_notice_verbosity: Notice detail level ("minimal", "normal", "verbose")
             compaction_notice_min_level: Only show notice if compaction level >= this
+            output_reserve_fraction: Fraction of max_output_tokens to reserve for
+                responses (0.0-1.0, default: 0.5). Lower values give more context
+                budget at the cost of less headroom for long responses.
             hooks: Optional hooks instance for emitting observability events
         """
         self.messages: list[dict[str, Any]] = []
@@ -147,6 +153,7 @@ class SimpleContextManager:
         self.compaction_notice_token_reserve = compaction_notice_token_reserve
         self.compaction_notice_verbosity = compaction_notice_verbosity
         self.compaction_notice_min_level = compaction_notice_min_level
+        self.output_reserve_fraction = output_reserve_fraction
         self._hooks = hooks
         self._last_compaction_stats: dict[str, Any] | None = None
         self._system_prompt_factory: Callable[[], Awaitable[str]] | None = None
@@ -1166,9 +1173,7 @@ Note: This compaction is ephemeral (affects only this request). Full history is 
             return token_budget
 
         safety_margin = 4096  # Buffer to avoid hitting hard limits
-        output_reserve_fraction = (
-            0.5  # Reserve 50% of max output (most responses are smaller)
-        )
+        output_reserve_fraction = self.output_reserve_fraction
 
         # Try provider-based dynamic budget
         if provider is not None:
